@@ -1,0 +1,259 @@
+---
+title: "Spotify-Price-Prediction"
+author: "Shrey Jaradi"
+date: "2022-11-28"
+output:
+  pdf_document: default
+  html_document: default
+---
+------------------------------------------------------------------------------------------------------------
+#### Predict the year of the song based on different characteristics like album cover etc. (from dataset -1)
+------------------------------------------------------------------------------------------------------------
+
+```{r}
+library(dplyr)
+library(caret)
+library(ggplot2)
+library(naniar)
+library(tidyverse)
+library(corrr)
+library(lubridate)
+library(psych)
+library(randomForest)
+library(e1071)
+library(class)
+library(caTools)
+print("Library Successfully loaded")
+```
+
+```{r}
+tracks_spotify_df = read.csv(file='../Dataset/dataset_one/tracks.csv')
+```
+
+```{r}
+head(tracks_spotify_df)
+```
+
+```{r}
+dim(tracks_spotify_df)
+```
+
+
+```{r}
+tracks_spotify_df = tracks_spotify_df[1:50000,]
+```
+
+
+```{r}
+summary.default(tracks_spotify_df)
+```
+
+Missing values
+```{r}
+gg_miss_var(tracks_spotify_df)
+```
+
+Checking for Missing Values
+
+```{r}
+tracks_spotify_df %>% summarise_all(~ sum(is.na(.)))
+```
+
+
+Creating new column for year from release_date column and converting the column datatype to datetime
+```{r}
+tracks_spotify_df$release_year = substring(tracks_spotify_df$release_date,1,4)
+tracks_spotify_df$release_year = as.integer(tracks_spotify_df$release_year)
+```
+
+```{r}
+unique(tracks_spotify_df$release_year)
+```
+
+group by year, and check for the popularity for each year
+```{r}
+popularity_by_year = tracks_spotify_df %>% group_by(release_year) %>% dplyr::summarize(total_popularity=sum(popularity))
+```
+
+
+Popularity by year 
+```{r}
+ggplot(popularity_by_year, aes(x = release_year, y = total_popularity)) + geom_bar(position = "dodge", stat="identity", fill="lightblue", color="black") 
+```
+
+
+check for the outlier 
+```{r}
+ggplot(tracks_spotify_df) +aes(x = "", y = release_year) +geom_boxplot(fill = "#0c4c8a") + theme_minimal()
+```
+
+
+Finding out the outlier in the release_year, if there are any and removing !! 
+```{r}
+Quant = quantile(tracks_spotify_df$release_year, probs=c(.25, .75), na.rm = T)
+Quant
+iqr_val = IQR(tracks_spotify_df$release_year, na.rm = T)
+iqr_val
+tracks_spotify_df_new = tracks_spotify_df %>% filter(release_year > (Quant[1] - 0.5*iqr_val) & release_year < (Quant[2] + 0.5*iqr_val))
+```
+
+```{r}
+par(mfrow=c(2,1))
+options(repr.plot.width=12, repr.plot.height=6)
+boxplot(tracks_spotify_df_new$release_year, col = "yellow", horizontal = T, main = "After Removing Outliers - Price")
+boxplot(tracks_spotify_df$release_year, col = "green", horizontal = T, main = "Before Removing Outliers Price")
+```
+
+
+Excluding unique id variable that aren't needed for our problem so, and aren;t much important.
+```{r}
+ tracks_spotify_df_filter = tracks_spotify_df_new[,c("popularity", "duration_ms","explicit", "danceability" , "energy", "key", "loudness" ,"mode", "speechiness" , "acousticness" , "instrumentalness" ,"liveness" , "valence" ,"tempo" , "time_signature","release_year")]
+```
+
+
+Correlation of each data focused on release_year as that will be our response variable
+```{r}
+corr_mat = correlate(tracks_spotify_df_filter[,c("popularity", "duration_ms","explicit", "danceability" , "energy", "key", "loudness" ,"mode", "speechiness" , "acousticness" , "instrumentalness" ,"liveness" , "valence" ,"tempo" , "time_signature","release_year")])
+corr_mat %>%focus(release_year) %>% mutate(term = reorder(term, release_year)) %>% ggplot(aes(term,release_year )) + geom_col() + coord_flip() + theme_bw()
+```
+
+Splitting into train and test dataset, taking on 1lakh records because of the memory issue
+```{r}
+track_spotify_filter_index = createDataPartition(tracks_spotify_df_filter$release_year, p=.70, list=FALSE)
+track_spotify_filter_train = tracks_spotify_df_filter[track_spotify_filter_index,]
+track_spotify_filter_test =  tracks_spotify_df_filter[-track_spotify_filter_index,]
+```
+
+
+
+### Multiple Linear Regression model 
+To predict the price, to check if we can predict using the regression classifier 
+```{r}
+lm_model = lm(release_year ~ popularity +  explicit  + danceability  + energy + loudness  + acousticness + instrumentalness, data=track_spotify_filter_train)
+summary(lm_model)
+```
+
+
+#### Random Forest Model to predict the year using different predictor variable
+```{r}
+rf_model = randomForest(release_year ~ popularity +  explicit  + danceability  + energy + loudness  + acousticness + instrumentalness, data=track_spotify_filter_train)
+summary(rf_model)
+```
+
+
+```{r}
+predicted_val = predict(rf_model, track_spotify_filter_test[,-16])
+predicted_val = ceiling(predicted_val)
+```
+
+
+```{r}
+postResample(predicted_val, track_spotify_filter_test$release_year)
+```
+
+Model Performance 
+```{r}
+plot(rf_model)
+```
+Important variables plot 
+```{r}
+varImpPlot(rf_model)
+```
+
+Tunning the Random Forest Model 
+```{r}
+model_tuned = tuneRF(x=track_spotify_filter_train[,c("popularity", "explicit","danceability", "energy", "loudness", "acousticness",  "instrumentalness")],  y=track_spotify_filter_train$release_year,ntreeTry=500,mtryStart=4, stepFactor=1.5,improve=0.01,trace=FALSE)
+```
+
+
+```{r}
+plot(model_tuned)
+```
+
+```{r}
+predicted_tuned_val = predict(rf_model, newdata=track_spotify_filter_test[,-16])
+predicted_tuned_val = ceiling(predicted_tuned_val)
+```
+
+
+```{r}
+postResample(predicted_val, track_spotify_filter_test$release_year)
+```
+
+The answer to our research question, to predict the release_year of the song from it's feature. Yes, as we took some of the correlated features and applied linear regression , Random Forest classifier to predict the year. And our Random Forest classifier shows good R-square value. Overall it looks good as of now. Hopefully we can predict the year from other features in our dataset like "popularity", "explicit","danceability", "energy", "loudness", "acousticness",  "instrumentalness".
+
+
+
+----------------------------------------------------------------------------------------------------------
+###Which genre got famous/changed according to year and why? (from dataset -3)
+----------------------------------------------------------------------------------------------------------
+https://www.kaggle.com/code/akiboy96/spotify-song-popularity-genre-exploration/data?select=genre_music.csv
+
+```{r}
+genre_spotify_df = read.csv(file='../Dataset/dataset_three/genre_music.csv')
+head(genre_spotify_df)
+```
+```{r}
+dim(genre_spotify_df)
+```
+
+```{r}
+summary.default(genre_spotify_df)
+```
+
+```{r}
+colnames(genre_spotify_df)
+```
+
+check for missing values 
+```{r}
+naniar::gg_miss_var(genre_spotify_df) +
+  theme_minimal()+
+  labs(y = "Look at all the Missing Values") 
+```
+
+Find unique values in genre , popularity, decade
+```{r}
+unique(genre_spotify_df$genre)
+unique(genre_spotify_df$popularity)
+unique(genre_spotify_df$decade)
+```
+
+Finding the outlier
+```{r}
+par(mfcol=c(2,3))
+boxplot(genre_spotify_df$popularity, col = "yellow", horizontal = T, main = "Popularity")
+boxplot(as.factor(genre_spotify_df$genre), col = "green", horizontal = T, main = "Genre")
+boxplot(as.factor(genre_spotify_df$decade), col = "orange", horizontal = T, main = "Decade")
+
+
+```
+group the data with decade and genre 
+```{r}
+genre_grp = genre_spotify_df %>% group_by(decade, genre)  %>% dplyr::summarise(total_popularity = sum(popularity))
+```
+
+
+
+```{r}
+ggplot(genre_grp, aes(x = decade, y = total_popularity, fill = genre )) +
+  geom_bar(position = "dodge", stat = "identity") +
+  theme_classic() +
+  labs(title = "Genre got Popularity by year", x = "Decade", y = "Popular") +
+  theme(plot.title = element_text(face = "bold"))
+
+```
+
+This plot answer our question of Popular genre by year
+This are the genre that were famous in each decade, 
+ - the most popular genre is pop in 1960s
+ - in 2000s r&b genre was famous
+ - in 2010s pop was famous 
+ - in 1970s again pop was famous 
+ - in 1980s r&b was famous 
+ - 1990s  r&b was famous 
+
+
+
+
+
